@@ -27,7 +27,7 @@ import numpy as np
 from lsst.ts import hexapod
 
 
-class UtilsModel(unittest.TestCase):
+class UtilsTestCase(unittest.TestCase):
     def xyiter(self):
         """Return a list of xypos, angle (deg), desired rotated xypos.
         """
