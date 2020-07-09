@@ -1,0 +1,9 @@
+# Invalid data for a lookup table: one row has a missing value
+
+Elevation    X       Y       Z       U       V       W
+#  deg      um      um      um     deg     deg     deg
+     0     100    -500     500   0.010   0.020   0.000
+     2     150    -450     510   0.011   0.019   0.005
+    10     210    -440     530   0.013   0.017
+    45     220    -350     525   0.016   0.011   0.002
+    90     300    -200     540   0.001  -0.001  -0.001

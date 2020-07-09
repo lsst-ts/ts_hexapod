@@ -1,0 +1,9 @@
+# Invalid data for a lookup table: the correction columns are out of order
+
+Elevation    Z       X       Y       U       V       W
+#  deg      um      um      um     deg     deg     deg
+     0     500     100    -500   0.010   0.020   0.000
+     2     510     150    -450   0.011   0.019   0.005
+    10     530     210    -440   0.013   0.017   0.001
+    45     525     220    -350   0.016   0.011   0.002
+    90     540     300    -200   0.001  -0.001  -0.001

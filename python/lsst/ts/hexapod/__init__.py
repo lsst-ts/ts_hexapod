@@ -21,6 +21,7 @@
 
 from .constants import *
 from .enums import *
+from .lookup_table import *
 from .structs import *
 from .utils import *
 from .hexapod_commander import *
