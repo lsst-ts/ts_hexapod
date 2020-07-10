@@ -21,6 +21,8 @@
 
 import argparse
 import copy
+import os
+import pathlib
 
 from lsst.ts import salobj
 from lsst.ts import hexrotcomm
@@ -30,6 +32,7 @@ from . import enums
 from . import structs
 from . import utils
 from . import mock_controller
+from .lookup_table import LookupTable
 
 
 class ControllerConstants:
@@ -69,6 +72,9 @@ class HexapodCsc(hexrotcomm.BaseCsc):
         that it is a valid value) except in simulation mode,
         because in normal operation the initial state is the current state
         of the controller. This is provided for unit testing.
+    lut_dir : `str`, optional
+        Directory of LUT data files, or None for the standard directory
+        (obtained from `get_lut_dir`). This is provided for unit testing.
     simulation_mode : `int` (optional)
         Simulation mode. Allowed values:
 
@@ -90,7 +96,9 @@ class HexapodCsc(hexrotcomm.BaseCsc):
     * The simulation mode can only be set at construction time.
     """
 
-    def __init__(self, index, initial_state=salobj.State.OFFLINE, simulation_mode=0):
+    def __init__(
+        self, index, initial_state=salobj.State.OFFLINE, lut_dir=None, simulation_mode=0
+    ):
         index = enums.SalIndex(index)
         controller_constants = IndexControllerConstants[index]
         self.xy_max_limit = constants.XY_MAX_LIMIT[index - 1]
@@ -102,6 +110,19 @@ class HexapodCsc(hexrotcomm.BaseCsc):
 
         structs.Config.FRAME_ID = controller_constants.config_frame_id
         structs.Telemetry.FRAME_ID = controller_constants.telemetry_frame_id
+
+        if lut_dir is None:
+            self.lut_dir = self.get_lut_dir(index=index)
+        else:
+            if not pathlib.Path(lut_dir).isdir():
+                raise ValueError(f"lut_dir={lut_dir} does not exist")
+            self.lut_dir = lut_dir
+
+        self.load_luts(
+            azimuth_prefix="default",
+            elevation_prefix="default",
+            temperature_prefix="default",
+        )
 
         super().__init__(
             name="Hexapod",
@@ -190,6 +211,13 @@ class HexapodCsc(hexrotcomm.BaseCsc):
             param2=data.rxrymax,
             param3=data.zmax,
             param4=data.rzmax,
+        )
+
+    async def do_loadLUTs(self, data):
+        self.load_luts(
+            elevation_prefix=data.elevationPrefix,
+            azimuth_prefix=data.azimuthPrefix,
+            temperature_prefix=data.temperaturePrefix,
         )
 
     async def do_move(self, data):
@@ -452,6 +480,41 @@ class HexapodCsc(hexrotcomm.BaseCsc):
             param5=data.v,
             param6=data.w,
         )
+
+    def load_luts(self, elevation_prefix, azimuth_prefix, temperature_prefix):
+        if elevation_prefix:
+            self.elevation_lut = LookupTable(
+                self.lut_dir / f"{elevation_prefix}_elevation_lut.dat"
+            )
+        if azimuth_prefix:
+            self.azimuth_lut = LookupTable(
+                self.lut_dir / f"{azimuth_prefix}_azimuth_lut.dat"
+            )
+        if temperature_prefix:
+            self.temperature_lut = LookupTable(
+                self.lut_dir / f"{temperature_prefix}_temperature_lut.dat"
+            )
+
+    def get_lut_dir(self, index):
+        """Get the standard directory containing LUT files.
+        """
+        config_env_var_name = "TS_CONFIG_MTTCS_DIR"
+        try:
+            config_pkg_dir = os.environ[config_env_var_name]
+        except KeyError:
+            raise RuntimeError(
+                f"Environment variable {config_env_var_name} not defined"
+            )
+        index_subdir = {
+            enums.SalIndex.CAM_HEXAPOD: "Camera",
+            enums.SalIndex.M2_HEXAPOD: "M2",
+        }[index]
+        lut_dir = (
+            pathlib.Path(config_pkg_dir).resolve() / "Hexapod" / "v1" / index_subdir
+        )
+        if not lut_dir.is_dir():
+            raise RuntimeError(f"{lut_dir!r} does not exist or is not a directory")
+        return lut_dir
 
     def _make_offset_set_command(self, data):
         """Make a POSITION_SET offset command for the low-level controller
