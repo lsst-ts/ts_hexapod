@@ -67,13 +67,13 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
 
     async def test_standard_state_transitions(self):
         enabled_commands = (
-            "configureVelocity",
+            "compensatedMove",
             "configureAcceleration",
+            "configureVelocity",
             "configureLimits",
+            "loadCompensationFiles",
             "move",
-            "moveLUT",
             "offset",
-            "offsetLUT",
             "pivot",
             "stop",
         )
@@ -86,21 +86,21 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
         data = await self.remote.evt_configuration.next(
             flush=False, timeout=STD_TIMEOUT
         )
-        initial_limit = data.accelerationAccmax
+        initial_limit = data.accelerationStrut
         new_limit = initial_limit - 0.1
         await self.remote.cmd_configureAcceleration.set_start(
-            accmax=new_limit, timeout=STD_TIMEOUT
+            acceleration=new_limit, timeout=STD_TIMEOUT
         )
         data = await self.remote.evt_configuration.next(
             flush=False, timeout=STD_TIMEOUT
         )
-        self.assertAlmostEqual(data.accelerationAccmax, new_limit)
+        self.assertAlmostEqual(data.accelerationStrut, new_limit)
 
-        for bad_accmax in (-1, 0, hexapod.MAX_ACCEL_LIMIT + 0.001):
-            with self.subTest(bad_accmax=bad_accmax):
+        for bad_acceleration in (-1, 0, hexapod.MAX_ACCEL_LIMIT + 0.001):
+            with self.subTest(bad_acceleration=bad_acceleration):
                 with salobj.assertRaisesAckError(ack=salobj.SalRetCode.CMD_FAILED):
                     await self.remote.cmd_configureAcceleration.set_start(
-                        accmax=bad_accmax, timeout=STD_TIMEOUT
+                        acceleration=bad_acceleration, timeout=STD_TIMEOUT
                     )
 
     async def test_configure_limits(self):
@@ -110,12 +110,12 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
         def get_limits(data):
             """Get position limits from a configuration sample."""
             return (
-                data.limitXYMax,
-                data.limitZMin,
-                data.limitZMax,
-                data.limitUVMax,
-                data.limitWMin,
-                data.limitWMax,
+                data.maxXY,
+                data.minZ,
+                data.maxZ,
+                data.maxUV,
+                data.minW,
+                data.maxW,
             )
 
         await self.make_csc(initial_state=salobj.State.ENABLED)
@@ -132,12 +132,12 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
 
         new_limits = tuple(lim * 0.1 for lim in initial_limits)
         await self.remote.cmd_configureLimits.set_start(
-            xymax=new_limits[0],
-            zmin=new_limits[1],
-            zmax=new_limits[2],
-            uvmax=new_limits[3],
-            wmin=new_limits[4],
-            wmax=new_limits[5],
+            maxXY=new_limits[0],
+            minZ=new_limits[1],
+            maxZ=new_limits[2],
+            maxUV=new_limits[3],
+            minW=new_limits[4],
+            maxW=new_limits[5],
             timeout=STD_TIMEOUT,
         )
         data = await self.remote.evt_configuration.next(
@@ -190,12 +190,12 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
             with self.subTest(bad_limits=bad_limits):
                 with salobj.assertRaisesAckError(ack=salobj.SalRetCode.CMD_FAILED):
                     await self.remote.cmd_configureLimits.set_start(
-                        xymax=bad_limits[0],
-                        zmin=bad_limits[1],
-                        zmax=bad_limits[2],
-                        uvmax=bad_limits[3],
-                        wmin=bad_limits[4],
-                        wmax=bad_limits[5],
+                        maxXY=bad_limits[0],
+                        minZ=bad_limits[1],
+                        maxZ=bad_limits[2],
+                        maxUV=bad_limits[3],
+                        minW=bad_limits[4],
+                        maxW=bad_limits[5],
                         timeout=STD_TIMEOUT,
                     )
 
@@ -204,12 +204,14 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
         """
 
         def get_velocity_limits(data):
-            """Get the velocity limits from a configuration sample."""
+            """Get the velocity limits from a configuration sample
+            in order: XY, Z, UV, W.
+            """
             return (
-                data.velocityXYMax,
-                data.velocityRxRyMax,
-                data.velocityZMax,
-                data.velocityRzMax,
+                data.maxVelocityXY,
+                data.maxVelocityZ,
+                data.maxVelocityUV,
+                data.maxVelocityW,
             )
 
         await self.make_csc(initial_state=salobj.State.ENABLED)
@@ -219,10 +221,10 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
         initial_vel_limits = get_velocity_limits(data)
         new_vel_limits = tuple(lim - 0.01 for lim in initial_vel_limits)
         await self.remote.cmd_configureVelocity.set_start(
-            xymax=new_vel_limits[0],
-            rxrymax=new_vel_limits[1],
-            zmax=new_vel_limits[2],
-            rzmax=new_vel_limits[3],
+            xy=new_vel_limits[0],
+            z=new_vel_limits[1],
+            uv=new_vel_limits[2],
+            w=new_vel_limits[3],
             timeout=STD_TIMEOUT,
         )
         data = await self.remote.evt_configuration.next(
@@ -245,7 +247,7 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
             (initial_vel_limits[0], 0, initial_vel_limits[2], initial_vel_limits[3]),
             (
                 initial_vel_limits[0],
-                bad_angular_vel_limit,
+                bad_linear_vel_limit,
                 initial_vel_limits[2],
                 initial_vel_limits[3],
             ),
@@ -253,7 +255,7 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
             (
                 initial_vel_limits[0],
                 initial_vel_limits[1],
-                bad_linear_vel_limit,
+                bad_angular_vel_limit,
                 initial_vel_limits[3],
             ),
             (initial_vel_limits[0], initial_vel_limits[1], initial_vel_limits[2], 0),
@@ -266,18 +268,18 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
             (0, 0, 0, 0),
             (
                 bad_linear_vel_limit,
-                bad_angular_vel_limit,
                 bad_linear_vel_limit,
+                bad_angular_vel_limit,
                 bad_angular_vel_limit,
             ),
         ):
             with self.subTest(bad_vel_limits=bad_vel_limits):
                 with salobj.assertRaisesAckError(ack=salobj.SalRetCode.CMD_FAILED):
                     await self.remote.cmd_configureVelocity.set_start(
-                        xymax=bad_vel_limits[0],
-                        rxrymax=bad_vel_limits[1],
-                        zmax=bad_vel_limits[2],
-                        rzmax=bad_vel_limits[3],
+                        xy=bad_vel_limits[0],
+                        z=bad_vel_limits[1],
+                        uv=bad_vel_limits[2],
+                        w=bad_vel_limits[3],
                         timeout=STD_TIMEOUT,
                     )
 
@@ -313,7 +315,7 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
         self, destination, est_move_duration, elaztemp, speed_factor=2
     ):
         """Test point to point motion using the positionSet and move
-        or moveLUT commands.
+        or compensatedMove commands.
 
         Create the CSC and assume it starts with inPosition=False.
 
@@ -325,8 +327,8 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
             Estimated move duration (sec)
         elaztemp : `List` [`float`] or `None`
             Elevation, azimuth (deg) and temperature (C)
-            for the moveLUT command.
-            If None then call move instead of moveLUT.
+            for the compensatedMove command.
+            If None then call move instead of compensatedMove.
         speed_factor : `float`
             Amount by which to scale actuator speeds. Intended to allow
             speeding up moves so tests run more quickly.
@@ -348,7 +350,7 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
 
     async def basic_check_move(self, destination, est_move_duration, elaztemp):
         """Test point to point motion using the positionSet and move
-        or moveLUT commands.
+        or compensatedMove commands.
 
         Unlike `check_move` this assumes the CSC has been created.
         If you have just created the CSC then be sure not to
@@ -363,15 +365,15 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
             Estimated move duration (sec)
         elaztemp : `List` [`float`] or `None`
             Elevation, azimuth (deg) and temperature (C)
-            for the moveLUT command.
-            If None then call move instead of moveLUT.
+            for the compensatedMove command.
+            If None then call move instead of compensatedMove.
         """
         t0 = time.time()
         move_kwargs = self.make_xyzuvw_kwargs(destination)
         if elaztemp is None:
             await self.remote.cmd_move.set_start(**move_kwargs, timeout=STD_TIMEOUT)
         else:
-            await self.remote.cmd_moveLUT.set_start(
+            await self.remote.cmd_compensatedMove.set_start(
                 elevation=elaztemp[0],
                 azimuth=elaztemp[1],
                 temperature=elaztemp[2],
@@ -424,43 +426,13 @@ class TestHexapodCsc(hexrotcomm.BaseCscTestCase, asynctest.TestCase):
     async def test_offset(self):
         first_destination = (100, 200, -300, 0.01, 0.02, -0.015)
         offset = (50, -100, 135, 0.005, -0.005, 0.01)
-        await self.check_offset(
-            first_destination=first_destination,
-            offset=offset,
-            est_move_duration=1,
-            elaztemp=None,
-        )
-
-    async def test_offset_lut(self):
-        first_destination = (120, -180, 300, 0.01, 0.02, -0.015)
-        offset = (-150, 100, -135, 0.005, -0.005, 0.01)
-        elaztemp = (43, 56, 20)
-        await self.check_offset(
-            first_destination=first_destination,
-            offset=offset,
-            est_move_duration=1,
-            elaztemp=elaztemp,
-        )
-
-    async def check_offset(
-        self, first_destination, offset, est_move_duration, elaztemp
-    ):
         await self.check_move(
-            destination=first_destination, est_move_duration=1, elaztemp=elaztemp
+            destination=first_destination, est_move_duration=1, elaztemp=None
         )
         offset = (50, -100, 135, 0.005, -0.005, 0.01)
         desired_destination = np.add(first_destination, offset)
         offset_kwargs = self.make_xyzuvw_kwargs(offset)
-        if elaztemp is None:
-            await self.remote.cmd_offset.set_start(**offset_kwargs, timeout=STD_TIMEOUT)
-        else:
-            await self.remote.cmd_offsetLUT.set_start(
-                **offset_kwargs,
-                elevation=elaztemp[0],
-                azimuth=elaztemp[1],
-                temperature=elaztemp[2],
-                timeout=STD_TIMEOUT,
-            )
+        await self.remote.cmd_offset.set_start(**offset_kwargs, timeout=STD_TIMEOUT)
         await self.assert_next_controller_state(
             controllerState=Hexapod.ControllerState.ENABLED,
             enabledSubstate=Hexapod.EnabledSubstate.MOVING_POINT_TO_POINT,

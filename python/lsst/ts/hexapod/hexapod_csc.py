@@ -72,14 +72,15 @@ class HexapodCsc(hexrotcomm.BaseCsc):
         that it is a valid value) except in simulation mode,
         because in normal operation the initial state is the current state
         of the controller. This is provided for unit testing.
-    lut_dir : `str`, optional
-        Directory of LUT data files, or None for the standard directory
-        (obtained from `get_lut_dir`). This is provided for unit testing.
     simulation_mode : `int` (optional)
         Simulation mode. Allowed values:
 
         * 0: regular operation.
         * 1: simulation: use a mock low level controller.
+    compensation_data_dir : `str`, optional
+        Directory of compensation data files, or None for
+        the standard directory (obtained from `get_compensation_data_dir`).
+        This is provided for unit testing.
 
     Notes
     -----
@@ -97,7 +98,11 @@ class HexapodCsc(hexrotcomm.BaseCsc):
     """
 
     def __init__(
-        self, index, initial_state=salobj.State.OFFLINE, lut_dir=None, simulation_mode=0
+        self,
+        index,
+        initial_state=salobj.State.OFFLINE,
+        compensation_data_dir=None,
+        simulation_mode=0,
     ):
         index = enums.SalIndex(index)
         controller_constants = IndexControllerConstants[index]
@@ -111,12 +116,14 @@ class HexapodCsc(hexrotcomm.BaseCsc):
         structs.Config.FRAME_ID = controller_constants.config_frame_id
         structs.Telemetry.FRAME_ID = controller_constants.telemetry_frame_id
 
-        if lut_dir is None:
-            self.lut_dir = self.get_lut_dir(index=index)
+        if compensation_data_dir is None:
+            self.compensation_data_dir = self.get_compensation_data_dir(index=index)
         else:
-            if not pathlib.Path(lut_dir).isdir():
-                raise ValueError(f"lut_dir={lut_dir} does not exist")
-            self.lut_dir = lut_dir
+            if not pathlib.Path(compensation_data_dir).isdir():
+                raise ValueError(
+                    f"compensation_data_dir={compensation_data_dir} does not exist"
+                )
+            self.compensation_data_dir = compensation_data_dir
 
         self.load_luts(
             azimuth_prefix="default",
@@ -136,84 +143,103 @@ class HexapodCsc(hexrotcomm.BaseCsc):
         )
 
     # Hexapod-specific commands.
+    async def do_compensatedMove(self, data):
+        """Move to a specified position and orientation,
+        with compensation for telescope elevation, azimuth and temperature.
+        """
+        self.assert_enabled_substate(Hexapod.EnabledSubstate.STATIONARY)
+        cmd1 = self._make_position_set_command(data)
+        cmd2 = self.make_command(
+            code=enums.CommandCode.SET_ENABLED_SUBSTATE,
+            param1=enums.SetEnabledSubstateParam.MOVE_LUT,
+            param2=data.sync,
+            param3=data.azimuth,
+            param4=data.elevation,
+            param5=data.temperature,
+        )
+        await self.run_multiple_commands(cmd1, cmd2)
+
     async def do_configureAcceleration(self, data):
         """Specify the acceleration limit."""
         self.assert_enabled_substate(Hexapod.EnabledSubstate.STATIONARY)
         utils.check_positive_value(
-            data.accmax,
-            "accmax",
+            data.acceleration,
+            "acceleration",
             constants.MAX_ACCEL_LIMIT,
             ExceptionClass=salobj.ExpectedError,
         )
-        await self.run_command(code=enums.CommandCode.CONFIG_ACCEL, param1=data.accmax)
+        await self.run_command(
+            code=enums.CommandCode.CONFIG_ACCEL, param1=data.acceleration
+        )
 
     async def do_configureLimits(self, data):
         """Specify position and rotation limits."""
         self.assert_enabled_substate(Hexapod.EnabledSubstate.STATIONARY)
         utils.check_positive_value(
-            data.xymax, "xymax", self.xy_max_limit, ExceptionClass=salobj.ExpectedError
+            data.maxXY, "maxXY", self.xy_max_limit, ExceptionClass=salobj.ExpectedError
         )
         utils.check_negative_value(
-            data.zmin, "zmin", self.z_min_limit, ExceptionClass=salobj.ExpectedError
+            data.minZ, "minZ", self.z_min_limit, ExceptionClass=salobj.ExpectedError
         )
         utils.check_positive_value(
-            data.zmax, "zmax", self.z_max_limit, ExceptionClass=salobj.ExpectedError
+            data.maxZ, "maxZ", self.z_max_limit, ExceptionClass=salobj.ExpectedError
         )
         utils.check_positive_value(
-            data.uvmax, "uvmax", self.uv_max_limit, ExceptionClass=salobj.ExpectedError
+            data.maxUV, "maxUV", self.uv_max_limit, ExceptionClass=salobj.ExpectedError
         )
         utils.check_negative_value(
-            data.wmin, "wmin", self.w_min_limit, ExceptionClass=salobj.ExpectedError
+            data.minW, "minW", self.w_min_limit, ExceptionClass=salobj.ExpectedError
         )
         utils.check_positive_value(
-            data.wmax, "wmax", self.w_max_limit, ExceptionClass=salobj.ExpectedError
+            data.maxW, "maxW", self.w_max_limit, ExceptionClass=salobj.ExpectedError
         )
         await self.run_command(
             code=enums.CommandCode.CONFIG_LIMITS,
-            param1=data.xymax,
-            param2=data.zmin,
-            param3=data.zmax,
-            param4=data.uvmax,
-            param5=data.wmin,
-            param6=data.wmax,
+            param1=data.maxXY,
+            param2=data.minZ,
+            param3=data.maxZ,
+            param4=data.maxUV,
+            param5=data.minW,
+            param6=data.maxW,
         )
 
     async def do_configureVelocity(self, data):
         """Specify velocity limits."""
         self.assert_enabled_substate(Hexapod.EnabledSubstate.STATIONARY)
         utils.check_positive_value(
-            data.xymax,
-            "xymax",
+            data.xy,
+            "xy",
             constants.MAX_LINEAR_VEL_LIMIT,
             ExceptionClass=salobj.ExpectedError,
         )
         utils.check_positive_value(
-            data.rxrymax,
-            "rxrymax",
+            data.z,
+            "z",
+            constants.MAX_LINEAR_VEL_LIMIT,
+            ExceptionClass=salobj.ExpectedError,
+        )
+        utils.check_positive_value(
+            data.uv,
+            "uv",
             constants.MAX_ANGULAR_VEL_LIMIT,
             ExceptionClass=salobj.ExpectedError,
         )
         utils.check_positive_value(
-            data.zmax,
-            "zmax",
-            constants.MAX_LINEAR_VEL_LIMIT,
-            ExceptionClass=salobj.ExpectedError,
-        )
-        utils.check_positive_value(
-            data.rzmax,
-            "rzmax",
+            data.w,
+            "w",
             constants.MAX_ANGULAR_VEL_LIMIT,
             ExceptionClass=salobj.ExpectedError,
         )
         await self.run_command(
             code=enums.CommandCode.CONFIG_VEL,
-            param1=data.xymax,
-            param2=data.rxrymax,
-            param3=data.zmax,
-            param4=data.rzmax,
+            param1=data.xy,
+            param2=data.uv,
+            param3=data.z,
+            param4=data.w,
         )
 
-    async def do_loadLUTs(self, data):
+    async def do_loadCompensationFiles(self, data):
+        self.assert_enabled_substate(Hexapod.EnabledSubstate.STATIONARY)
         self.load_luts(
             elevation_prefix=data.elevationPrefix,
             azimuth_prefix=data.azimuthPrefix,
@@ -232,22 +258,6 @@ class HexapodCsc(hexrotcomm.BaseCsc):
         )
         await self.run_multiple_commands(cmd1, cmd2)
 
-    async def do_moveLUT(self, data):
-        """Move to a specified position and orientation,
-        with compensation for telescope elevation, azimuth and temperature.
-        """
-        self.assert_enabled_substate(Hexapod.EnabledSubstate.STATIONARY)
-        cmd1 = self._make_position_set_command(data)
-        cmd2 = self.make_command(
-            code=enums.CommandCode.SET_ENABLED_SUBSTATE,
-            param1=enums.SetEnabledSubstateParam.MOVE_LUT,
-            param2=data.sync,
-            param3=data.azimuth,
-            param4=data.elevation,
-            param5=data.temperature,
-        )
-        await self.run_multiple_commands(cmd1, cmd2)
-
     async def do_offset(self, data):
         """Move by a specified offset in position and orientation.
         """
@@ -257,22 +267,6 @@ class HexapodCsc(hexrotcomm.BaseCsc):
             code=enums.CommandCode.SET_ENABLED_SUBSTATE,
             param1=enums.SetEnabledSubstateParam.MOVE_POINT_TO_POINT,
             param2=data.sync,
-        )
-        await self.run_multiple_commands(cmd1, cmd2)
-
-    async def do_offsetLUT(self, data):
-        """Specify an offset for the ``move`` or ``moveLUT`` command,
-        with compensation for telescope elevation, azimuth and temperature.
-        """
-        self.assert_enabled_substate(Hexapod.EnabledSubstate.STATIONARY)
-        cmd1 = self._make_offset_set_command(data)
-        cmd2 = self.make_command(
-            code=enums.CommandCode.SET_ENABLED_SUBSTATE,
-            param1=enums.SetEnabledSubstateParam.MOVE_LUT,
-            param2=data.sync,
-            param3=data.azimuth,
-            param4=data.elevation,
-            param5=data.temperature,
         )
         await self.run_multiple_commands(cmd1, cmd2)
 
@@ -306,53 +300,28 @@ class HexapodCsc(hexrotcomm.BaseCsc):
             TCP/IP server.
         """
         self.evt_configuration.set_put(
-            accelerationAccmax=server.config.strut_acceleration,
-            limitXYMax=server.config.pos_limits[0],
-            limitZMin=server.config.pos_limits[1],
-            limitZMax=server.config.pos_limits[2],
-            limitUVMax=server.config.pos_limits[3],
-            limitWMin=server.config.pos_limits[4],
-            limitWMax=server.config.pos_limits[5],
-            velocityXYMax=server.config.vel_limits[0],
-            velocityRxRyMax=server.config.vel_limits[1],
-            velocityZMax=server.config.vel_limits[2],
-            velocityRzMax=server.config.vel_limits[3],
-            positionX=server.config.initial_pos[0],
-            positionY=server.config.initial_pos[1],
-            positionZ=server.config.initial_pos[2],
-            positionU=server.config.initial_pos[3],
-            positionV=server.config.initial_pos[4],
-            positionW=server.config.initial_pos[5],
+            maxXY=server.config.pos_limits[0],
+            minZ=server.config.pos_limits[1],
+            maxZ=server.config.pos_limits[2],
+            maxUV=server.config.pos_limits[3],
+            minW=server.config.pos_limits[4],
+            maxW=server.config.pos_limits[5],
+            maxVelocityXY=server.config.vel_limits[0],
+            maxVelocityUV=server.config.vel_limits[1],
+            maxVelocityZ=server.config.vel_limits[2],
+            maxVelocityW=server.config.vel_limits[3],
+            initialX=server.config.initial_pos[0],
+            initialY=server.config.initial_pos[1],
+            initialZ=server.config.initial_pos[2],
+            initialU=server.config.initial_pos[3],
+            initialV=server.config.initial_pos[4],
+            initialW=server.config.initial_pos[5],
             pivotX=server.config.pivot[0],
             pivotY=server.config.pivot[1],
             pivotZ=server.config.pivot[2],
-            elevationRawLUTElevIndex=[
-                int(index) for index in server.config.el_lut_index
-            ],
-            elevationRawLUTX=server.config.el_lut_x,
-            elevationRawLUTY=server.config.el_lut_y,
-            elevationRawLUTZ=server.config.el_lut_z,
-            elevationRawLUTRx=server.config.el_lut_rx,
-            elevationRawLUTRy=server.config.el_lut_ry,
-            elevationRawLUTRz=server.config.el_lut_rz,
-            azimuthRawLUTAzIndex=[int(index) for index in server.config.az_lut_index],
-            azimuthRawLUTX=server.config.az_lut_x,
-            azimuthRawLUTY=server.config.az_lut_y,
-            azimuthRawLUTZ=server.config.az_lut_z,
-            azimuthRawLUTRx=server.config.az_lut_rx,
-            azimuthRawLUTRy=server.config.az_lut_ry,
-            azimuthRawLUTRz=server.config.az_lut_rz,
-            temperatureRawLUTTempIndex=[
-                int(index) for index in server.config.temp_lut_index
-            ],
-            temperatureRawLUTX=server.config.temp_lut_x,
-            temperatureRawLUTY=server.config.temp_lut_y,
-            temperatureRawLUTZ=server.config.temp_lut_z,
-            temperatureRawLUTRx=server.config.temp_lut_rx,
-            temperatureRawLUTRy=server.config.temp_lut_ry,
-            temperatureRawLUTRz=server.config.temp_lut_rz,
-            strutDisplacementMax=server.config.strut_displacement_max,
-            strutVelocityMax=server.config.strut_velocity_max,
+            maxDisplacementStrut=server.config.strut_displacement_max,
+            maxVelocityStrut=server.config.strut_velocity_max,
+            accelerationStrut=server.config.strut_acceleration,
         )
 
     def telemetry_callback(self, server):
@@ -429,8 +398,8 @@ class HexapodCsc(hexrotcomm.BaseCsc):
         Parameters
         ----------
         data : ``struct with x, y, z, u, v, w`` fields.
-            Data from the ``move`` or ``moveLUT`` command.
-            May also be data from the ``offset`` or ``offsetLUT`` commands,
+            Data from the ``move`` or ``compensatedMove`` command.
+            May also be data from the ``offset`` command,
             but the fields must be changed to absolute positions.
         """
         utils.check_symmetrical_range(
@@ -482,21 +451,41 @@ class HexapodCsc(hexrotcomm.BaseCsc):
         )
 
     def load_luts(self, elevation_prefix, azimuth_prefix, temperature_prefix):
+        """Load compensation lookup tables.
+
+        Parameters
+        ----------
+        elevation_prefix : `str`
+            Elevation compensation lookup table file prefix.
+            For example "default" will load "default_elevation_lut.dat"
+            in self.compensation_data_dir.
+            If blank then the existing LUT data is left unchanged.
+        azimuth_prefix : `str`
+            Elevation compensation lookup table file prefix.
+            If blank then the existing LUT data is left unchanged.
+        temperature_prefix : `str`
+            Temperature compensation lookup table file prefix.
+            If blank then the existing LUT data is left unchanged.
+        """
         if elevation_prefix:
             self.elevation_lut = LookupTable(
-                self.lut_dir / f"{elevation_prefix}_elevation_lut.dat"
+                self.compensation_data_dir / f"{elevation_prefix}_elevation_lut.dat"
             )
         if azimuth_prefix:
             self.azimuth_lut = LookupTable(
-                self.lut_dir / f"{azimuth_prefix}_azimuth_lut.dat"
+                self.compensation_data_dir / f"{azimuth_prefix}_azimuth_lut.dat"
             )
         if temperature_prefix:
             self.temperature_lut = LookupTable(
-                self.lut_dir / f"{temperature_prefix}_temperature_lut.dat"
+                self.compensation_data_dir / f"{temperature_prefix}_temperature_lut.dat"
             )
 
-    def get_lut_dir(self, index):
-        """Get the standard directory containing LUT files.
+    def get_compensation_data_dir(self, index):
+        """Get the standard directory containing compensation data files.
+
+        These files are in the ``ts_config_mttcs`` package,
+        in ``Hexapod/v1``, in a subdirectory whose name
+        depends on the CSC index.
         """
         config_env_var_name = "TS_CONFIG_MTTCS_DIR"
         try:
@@ -509,16 +498,18 @@ class HexapodCsc(hexrotcomm.BaseCsc):
             enums.SalIndex.CAM_HEXAPOD: "Camera",
             enums.SalIndex.M2_HEXAPOD: "M2",
         }[index]
-        lut_dir = (
+        compensation_data_dir = (
             pathlib.Path(config_pkg_dir).resolve() / "Hexapod" / "v1" / index_subdir
         )
-        if not lut_dir.is_dir():
-            raise RuntimeError(f"{lut_dir!r} does not exist or is not a directory")
-        return lut_dir
+        if not compensation_data_dir.is_dir():
+            raise RuntimeError(
+                f"{compensation_data_dir!r} does not exist or is not a directory"
+            )
+        return compensation_data_dir
 
     def _make_offset_set_command(self, data):
         """Make a POSITION_SET offset command for the low-level controller
-        using data from the offset or offsetLUT CSC command.
+        using data from the offset CSC command.
         """
         position_data = copy.copy(data)
         position_data.x += self.server.telemetry.commanded_pos[0]

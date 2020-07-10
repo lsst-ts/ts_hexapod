@@ -76,21 +76,21 @@ State transitions commands (none take arguments):
 * clearError
 
 Other commands and arguments:
-* configureAcceleration accmax                      # Set acceleration: µm/s2
-* configureLimits xymax zmin zmax uvmax wmin wmax   # Set position limits: µm µm µm deg deg deg
-* configureVelocity xymax rxrymax zmax rzmax        # Set velocity: µm/s deg/s µm/s deg/s
-* move x  y  z  u   v   w   synch       # Move to the specified position and orientation
-* moveLUT elevation azimuth temperature x  y  z  u  v  w    synch       # Move with compensation
-* offset x  y  z  u   v   w   synch     # Offset by a specified change in position and orientation
-* offsetLUT elevation azimuth temperature x  y  z  u   v   w   synch    # Offset with compensation
-* pivot x  y  z     # Set the pivot point
+* configureAcceleration acceleration                # Set strut acceleration: µm/s2
+* configureLimits maxXY minZ maxZ maxUV minW maxW   # Set position limits: µm µm µm deg deg deg
+* configureVelocity xy z uv w   # Set velocity: µm/s deg/s µm/s deg/s
+* compensatedMove elevation azimuth temperature x y z u v w synch  # Move with compensation
+* move x y z u v w synch        # Move to the specified position and orientation
+* offset x y z u v w synch      # Offset by a specified change in position and orientation
+* pivot x y z                   # Set the pivot point
 * stop
 
 Position (x y z) is in µm
 Angles (u, v, w, elevation, and azimuth) are in degrees
 sync is 1 to synchronize motion (actuators start and stop together), 0 to not
 Temperature is in Celsius
-"Compensation" means the hexapod position is adjusted for telescope position and ambient temperature.
+"Compensation" means pivot position and orientation are compensated
+for telescope position and ambient temperature.
 
 For example:
   move 5 5 5 0.001 0 0 0
@@ -104,9 +104,9 @@ For example:
         Parameters
         ----------
         args : `List` [`float`]
-            One value: accmax (deg/sec2).
+            One value: acceleration (deg/sec2).
         """
-        kwargs = self.check_arguments(args, "accmax")
+        kwargs = self.check_arguments(args, "acceleration")
         await self.remote.cmd_configureAcceleration.set_start(
             **kwargs, timeout=STD_TIMEOUT
         )
@@ -117,10 +117,10 @@ For example:
         Parameters
         ----------
         args : `List` [`float`]
-            Six values: xymax, zmin, zmax (µm), uvmax, wmin, wmax (deg).
+            Six values: maxXY, minZ, maxZ (µm), maxUV, minW, maxW (deg).
         """
         kwargs = self.check_arguments(
-            args, "xymax", "zmin", "zmax", "uvmax", "wmin", "wmax"
+            args, "maxXY", "minZ", "maxZ", "maxUV", "minW", "maxW"
         )
         await self.remote.cmd_configureLimits.set_start(**kwargs, timeout=STD_TIMEOUT)
 
@@ -130,10 +130,9 @@ For example:
         Parameters
         ----------
         args : `List` [`float`]
-            Four values: xymax (µm/sec), rxrymax (deg/sec),
-            zmax (µm/sec), rzmax (deg/sec)
+            Four values: xy (µm/sec), z (µm/sec), uv (deg/sec), w (deg/sec)
         """
-        kwargs = self.check_arguments(args, "xymax", "rxrymax", "zmax", "rzmax")
+        kwargs = self.check_arguments(args, "xy", "z", "uv", "w")
         await self.remote.cmd_configureVelocity.set_start(**kwargs, timeout=STD_TIMEOUT)
 
     async def do_move(self, args):
@@ -147,8 +146,8 @@ For example:
         self.check_arguments(args, "x", "y", "z", "u", "v", "w", ("sync", as_bool))
         await self.remote.cmd_move.start(timeout=STD_TIMEOUT)
 
-    async def do_moveLUT(self, args):
-        """Implement the moveLUT command.
+    async def do_compensatedMove(self, args):
+        """Implement the compensatedMove command.
 
         Parameters
         ----------
@@ -170,7 +169,7 @@ For example:
             "w",
             ("sync", as_bool),
         )
-        await self.remote.cmd_moveLUT.set_start(**kwargs, timeout=STD_TIMEOUT)
+        await self.remote.cmd_compensatedMove.set_start(**kwargs, timeout=STD_TIMEOUT)
 
     async def do_offset(self, args):
         """Implement the offset command.
@@ -182,31 +181,6 @@ For example:
         """
         kwargs = self.check_arguments(
             args, "x", "y", "z", "u", "v", "w", ("sync", as_bool)
-        )
-        await self.remote.cmd_offset.set_start(**kwargs, timeout=STD_TIMEOUT)
-
-    async def do_offsetLUT(self, args):
-        """Implement the offsetLUT command.
-
-        Parameters
-        ----------
-        args : `List` [`float`]
-            10 values:
-                elevation (deg), azimuth (deg), temperature (C),
-                x, y, z (µm), u, v, w (deg), sync (bool).
-        """
-        kwargs = self.check_arguments(
-            args,
-            "elevation",
-            "azimuth",
-            "temperature",
-            "x",
-            "y",
-            "z",
-            "u",
-            "v",
-            "w",
-            ("sync", as_bool),
         )
         await self.remote.cmd_offset.set_start(**kwargs, timeout=STD_TIMEOUT)
 
