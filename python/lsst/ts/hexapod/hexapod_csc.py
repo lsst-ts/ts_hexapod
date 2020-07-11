@@ -21,6 +21,7 @@
 
 import argparse
 import copy
+import math
 import os
 import pathlib
 
@@ -148,16 +149,45 @@ class HexapodCsc(hexrotcomm.BaseCsc):
         with compensation for telescope elevation, azimuth and temperature.
         """
         self.assert_enabled_substate(Hexapod.EnabledSubstate.STATIONARY)
-        cmd1 = self._make_position_set_command(data)
+
+        # Compute compensated position and orientation
+        elevation_corr = self.elevation_lut.get_correction(data.elevation)
+
+        # Wrap azimuth into the range [0, 360)
+        azimuth = salobj.angle_wrap_nonnegative(data.azimuth).deg
+        azimuth_corr = self.azimuth_lut.get_correction(azimuth)
+
+        # Handle out-of-range temperature by truncation
+        temperature = data.temperature
+        temperature = max(temperature, self.temperature_lut.input_data[0])
+        temperature = min(temperature, self.temperature_lut.input_data[-1])
+        temperature_corr = self.temperature_lut.get_correction(temperature)
+
+        total_corr = elevation_corr + azimuth_corr + temperature_corr
+
+        corr_data = copy.copy(data)
+        for index, name in enumerate(("x", "y", "z", "u", "v", "w")):
+            corr_value = getattr(data, name) + total_corr[index]
+            setattr(corr_data, name, corr_value)
+
+        cmd1 = self._make_position_set_command(corr_data)
         cmd2 = self.make_command(
             code=enums.CommandCode.SET_ENABLED_SUBSTATE,
-            param1=enums.SetEnabledSubstateParam.MOVE_LUT,
+            param1=enums.SetEnabledSubstateParam.MOVE_POINT_TO_POINT,
             param2=data.sync,
-            param3=data.azimuth,
-            param4=data.elevation,
-            param5=data.temperature,
         )
         await self.run_multiple_commands(cmd1, cmd2)
+        uncompensated_kwargs = get_pos_dict(data, "uncompensated")
+        compensated_kwargs = get_pos_dict(corr_data, "compensated")
+        self.evt_target.set_put(
+            applyCompensation=True,
+            elevation=data.elevation,
+            azimuth=data.azimuth,
+            temperature=data.temperature,
+            **uncompensated_kwargs,
+            **compensated_kwargs,
+            force_output=True,
+        )
 
     async def do_configureAcceleration(self, data):
         """Specify the acceleration limit."""
@@ -257,18 +287,41 @@ class HexapodCsc(hexrotcomm.BaseCsc):
             param2=data.sync,
         )
         await self.run_multiple_commands(cmd1, cmd2)
+        uncompensated_kwargs = get_pos_dict(data, "uncompensated")
+        compensated_kwargs = get_pos_dict(data, "compensated")
+        self.evt_target.set_put(
+            applyCompensation=False,
+            elevation=math.nan,
+            azimuth=math.nan,
+            temperature=math.nan,
+            **uncompensated_kwargs,
+            **compensated_kwargs,
+            force_output=True,
+        )
 
     async def do_offset(self, data):
         """Move by a specified offset in position and orientation.
         """
         self.assert_enabled_substate(Hexapod.EnabledSubstate.STATIONARY)
-        cmd1 = self._make_offset_set_command(data)
+        move_data = self._move_data_from_offset_data(data)
+        cmd1 = self._make_position_set_command(move_data)
         cmd2 = self.make_command(
             code=enums.CommandCode.SET_ENABLED_SUBSTATE,
             param1=enums.SetEnabledSubstateParam.MOVE_POINT_TO_POINT,
             param2=data.sync,
         )
         await self.run_multiple_commands(cmd1, cmd2)
+        uncompensated_kwargs = get_pos_dict(move_data, "uncompensated")
+        compensated_kwargs = get_pos_dict(move_data, "compensated")
+        self.evt_target.set_put(
+            applyCompensation=False,
+            elevation=math.nan,
+            azimuth=math.nan,
+            temperature=math.nan,
+            **uncompensated_kwargs,
+            **compensated_kwargs,
+            force_output=True,
+        )
 
     async def do_pivot(self, data):
         """Set the coordinates of the pivot point.
@@ -507,9 +560,10 @@ class HexapodCsc(hexrotcomm.BaseCsc):
             )
         return compensation_data_dir
 
-    def _make_offset_set_command(self, data):
-        """Make a POSITION_SET offset command for the low-level controller
-        using data from the offset CSC command.
+    def _move_data_from_offset_data(self, data):
+        """Make data for a move command from data for an offset command.
+
+        In other words, return a copy of ``data`` with absolute positions.
         """
         position_data = copy.copy(data)
         position_data.x += self.server.telemetry.commanded_pos[0]
@@ -518,8 +572,7 @@ class HexapodCsc(hexrotcomm.BaseCsc):
         position_data.u += self.server.telemetry.commanded_pos[3]
         position_data.v += self.server.telemetry.commanded_pos[4]
         position_data.w += self.server.telemetry.commanded_pos[5]
-
-        return self._make_position_set_command(position_data)
+        return position_data
 
     @classmethod
     async def amain(cls):
@@ -534,3 +587,10 @@ class HexapodCsc(hexrotcomm.BaseCsc):
         args = parser.parse_args()
         csc = cls(index=args.index, simulation_mode=int(args.simulate))
         await csc.done_task
+
+
+def get_pos_dict(data, prefix):
+    return {
+        f"{prefix}{name.upper()}": getattr(data, name)
+        for name in ("x", "y", "z", "u", "v", "w")
+    }
